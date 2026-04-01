@@ -565,6 +565,42 @@ textarea { resize: vertical; }
 /* =========================================================
    TABLE
    ========================================================= */
+.count-presets-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.count-presets-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+.count-presets {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.count-preset-btn {
+  min-width: 42px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border);
+  background: var(--white);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  transition: border-color .15s, color .15s, background .15s, transform .12s;
+}
+.count-preset-btn:hover {
+  border-color: var(--primary-b);
+  color: var(--primary);
+  background: var(--primary-l);
+  transform: translateY(-1px);
+}
+
 .table-wrap {
   overflow: auto;
   border-radius: var(--radius-sm);

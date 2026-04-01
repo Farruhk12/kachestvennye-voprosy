@@ -1,5 +1,6 @@
 const MAX_TOPICS = 15;
 const DEFAULT_COUNTS = { easy: 20, medium: 20, hard: 20 };
+const COUNT_PRESET_VALUES = [1, 5, 10, 20, 25, 30];
 
 const state = {
   topics: [],
@@ -26,6 +27,7 @@ const refs = {
   bulkTopicsInput: document.getElementById("bulkTopicsInput"),
   addBulkTopicsBtn: document.getElementById("addBulkTopicsBtn"),
   topicsChips: document.getElementById("topicsChips"),
+  countPresets: document.getElementById("countPresets"),
   countsTableBody: document.getElementById("countsTableBody"),
   totalQuestions: document.getElementById("totalQuestions"),
   generateBtn: document.getElementById("generateBtn"),
@@ -206,6 +208,24 @@ function updateTopicCount(topicId, level, value) {
     if (totalCell) totalCell.textContent = String(totalQuestionsForTopic(topic));
   }
   refs.totalQuestions.textContent = String(overallQuestions());
+  validateForm();
+}
+
+function applyPresetToAllCounts(value) {
+  const clamped = Math.max(0, Math.min(100, Number.isFinite(value) ? Math.floor(value) : 0));
+  if (state.topics.length === 0) {
+    setFormError("Сначала добавьте минимум одну тему.");
+    return;
+  }
+
+  for (const topic of state.topics) {
+    topic.counts.easy = clamped;
+    topic.counts.medium = clamped;
+    topic.counts.hard = clamped;
+  }
+
+  clearFormError();
+  renderCountsTable();
   validateForm();
 }
 
@@ -607,6 +627,14 @@ function bindEvents() {
     const level = target.getAttribute("data-level");
     if (!topicId || !level) return;
     updateTopicCount(topicId, level, Number(target.value));
+  });
+
+  refs.countPresets.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLButtonElement)) return;
+    const presetValue = Number(target.getAttribute("data-count-preset"));
+    if (!COUNT_PRESET_VALUES.includes(presetValue)) return;
+    applyPresetToAllCounts(presetValue);
   });
 
   refs.generateBtn.addEventListener("click", startGeneration);
