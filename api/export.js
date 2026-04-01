@@ -1,4 +1,4 @@
-import { jobs, buildDocx } from "./_lib.js";
+import { buildDocx } from "./_lib.js";
 
 export default function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -6,26 +6,27 @@ export default function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const payload = typeof req.body === "string" ? JSON.parse(req.body || "{}") : (req.body || {});
-  const jobId = String(payload?.jobId || "");
+  const result = payload?.result;
   const language = String(payload?.language || "RU").toUpperCase();
 
-  if (!jobId) return res.status(400).json({ error: "jobId обязателен." });
-
-  const job = jobs.get(jobId);
-  if (!job) return res.status(404).json({ error: "Job not found" });
-
-  if (!["completed", "completed_with_errors", "cancelled"].includes(job.status)) {
-    return res.status(409).json({ error: "Job is not completed yet" });
+  if (!result) return res.status(400).json({ error: "result обязателен." });
+  if (!result.questionsByLanguage?.[language]) {
+    return res.status(400).json({ error: `Язык ${language} недоступен.` });
   }
 
-  if (!job.languages.includes(language)) {
-    return res.status(400).json({ error: `Язык ${language} недоступен для этого задания.` });
-  }
+  // Build a synthetic job object for buildDocx
+  const job = {
+    context: result.metadata || {},
+    mode: result.metadata?.mode || "fast",
+    languages: Object.keys(result.questionsByLanguage),
+    resultByLanguage: result.questionsByLanguage
+  };
 
   const docxBuffer = buildDocx(job, language);
   const dateStr = new Date().toLocaleDateString("ru-RU");
-  const safeName = [job.context.subject, job.context.faculty, `${job.context.course}курс`, dateStr]
-    .map((s) => String(s).replace(/[^a-zA-Zа-яА-ЯёЁ0-9_\-.]/g, "_"))
+  const ctx = result.metadata || {};
+  const safeName = [ctx.subject, ctx.faculty, `${ctx.course || ""}курс`, dateStr]
+    .map((s) => String(s || "").replace(/[^a-zA-Zа-яА-ЯёЁ0-9_\-.]/g, "_"))
     .join("_");
   const filename = `${safeName}_${language}.docx`;
 

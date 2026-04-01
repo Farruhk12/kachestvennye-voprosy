@@ -1,9 +1,6 @@
 {
   "rewrites": [
-    { "source": "/api/generate/start", "destination": "/api/start" },
-    { "source": "/api/generate/:id/status", "destination": "/api/status?id=:id" },
-    { "source": "/api/generate/:id/result", "destination": "/api/result?id=:id" },
-    { "source": "/api/generate/:id/cancel", "destination": "/api/cancel?id=:id" },
+    { "source": "/api/generate", "destination": "/api/generate" },
     { "source": "/api/export/docx", "destination": "/api/export" }
   ]
 }

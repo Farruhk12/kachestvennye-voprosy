@@ -428,38 +428,39 @@ async function startGeneration() {
     return;
   }
 
+  setRunningUi(true);
+  refs.progressBlock.classList.remove("hidden");
+  refs.progressStatusLabel.textContent = "Генерация...";
+  refs.progressText.textContent = "...";
+
+  // Animate indeterminate bar while waiting
+  refs.progressFill.style.width = "100%";
+  refs.progressFill.style.opacity = "0.4";
+
   try {
-    const payload = currentPayload();
-    const response = await api("/api/generate/start", {
+    const result = await api("/api/generate", {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify(currentPayload())
     });
-    state.job.id = response.jobId;
-    state.job.status = response.status;
-    setRunningUi(true);
 
-    // Show progress block immediately with "started" indicator
-    refs.progressBlock.classList.remove("hidden");
-    refs.progressText.textContent = "Запуск...";
+    refs.progressFill.style.opacity = "1";
+    refs.progressStatusLabel.textContent = "Готово ✓";
+    refs.progressText.textContent = "100%";
+    refs.progressCount.textContent = `${result.metadata?.totalQuestions || 0} вопросов`;
 
-    const mode = refs.modeSelect.value;
-    const pollInterval = mode === "quality" ? 2000 : 1000;
-
-    await pollStatus();
-    state.job.pollTimer = setInterval(pollStatus, pollInterval);
+    state.job.result = result;
+    showResult(result);
   } catch (error) {
-    setFormError(error instanceof Error ? error.message : "Не удалось запустить генерацию.");
+    setFormError(error instanceof Error ? error.message : "Не удалось выполнить генерацию.");
+    refs.progressBlock.classList.add("hidden");
+  } finally {
     setRunningUi(false);
+    refs.progressFill.style.opacity = "1";
   }
 }
 
-async function cancelGeneration() {
-  if (!state.job.id) return;
-  try {
-    await api(`/api/generate/${state.job.id}/cancel`, { method: "POST", body: JSON.stringify({}) });
-  } catch (error) {
-    setFormError(error instanceof Error ? error.message : "Не удалось отменить генерацию.");
-  }
+function cancelGeneration() {
+  // No-op: synchronous generation cannot be cancelled mid-flight
 }
 
 async function copyCurrentLanguage() {
@@ -486,7 +487,7 @@ async function requestExport() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        jobId: state.job.id,
+        result: state.job.result,
         language: state.job.activeLanguage
       })
     });
