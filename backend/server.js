@@ -28,7 +28,10 @@ loadEnv();
 // Config
 // ---------------------------------------------------------------------------
 const PORT = Number(process.env.PORT || 3000);
-const PUBLIC_DIR = path.resolve(process.cwd(), "public");
+const PUBLIC_DIR = path.resolve(
+  path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")),
+  "../public"
+);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 
 const LEVELS = ["easy", "medium", "hard"];
@@ -958,7 +961,13 @@ const server = http.createServer(async (req, res) => {
 
 scheduleJobCleanup();
 
-server.listen(PORT, () => {
-  console.log(`Server started on http://localhost:${PORT}`); // eslint-disable-line no-console
-  if (!GEMINI_API_KEY) console.warn("WARNING: GEMINI_API_KEY not set"); // eslint-disable-line no-console
-});
+// Vercel serverless export
+export default server;
+
+// Local dev: start listening only when run directly (not imported by Vercel)
+if (process.env.VERCEL !== "1") {
+  server.listen(PORT, () => {
+    console.log(`Server started on http://localhost:${PORT}`); // eslint-disable-line no-console
+    if (!GEMINI_API_KEY) console.warn("WARNING: GEMINI_API_KEY not set"); // eslint-disable-line no-console
+  });
+}
