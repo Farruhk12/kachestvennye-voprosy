@@ -842,9 +842,9 @@ function scheduleJobCleanup() {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP server
+// HTTP request handler (shared by local server and Vercel export)
 // ---------------------------------------------------------------------------
-const server = http.createServer(async (req, res) => {
+async function handler(req, res) {
   try {
     const reqUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     const { pathname } = reqUrl;
@@ -957,15 +957,16 @@ const server = http.createServer(async (req, res) => {
     }
     sendJson(res, 500, { error: error instanceof Error ? error.message : "Internal server error" });
   }
-});
+}
 
 scheduleJobCleanup();
 
-// Vercel serverless export
-export default server;
+// Vercel serverless export — must be a plain function, not http.Server
+export default handler;
 
-// Local dev: start listening only when run directly (not imported by Vercel)
+// Local dev
 if (process.env.VERCEL !== "1") {
+  const server = http.createServer(handler);
   server.listen(PORT, () => {
     console.log(`Server started on http://localhost:${PORT}`); // eslint-disable-line no-console
     if (!GEMINI_API_KEY) console.warn("WARNING: GEMINI_API_KEY not set"); // eslint-disable-line no-console
