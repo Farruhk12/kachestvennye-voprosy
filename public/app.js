@@ -9,7 +9,9 @@ const state = {
     status: "idle",
     pollTimer: null,
     result: null,
-    activeLanguage: "RU"
+    activeLanguage: "RU",
+    requestPayload: null,
+    fallbackInProgress: false
   }
 };
 
@@ -422,6 +424,54 @@ async function api(url, options = {}) {
   return payload;
 }
 
+function isJobStorageUnavailableError(error) {
+  const message = String(error instanceof Error ? error.message : error).toLowerCase();
+  return message.includes("job not found");
+}
+
+function shouldFallbackToSync(error) {
+  const message = String(error instanceof Error ? error.message : error).toLowerCase();
+  return message.includes("job not found")
+    || message.includes("api route not found")
+    || message.includes("method not allowed")
+    || message.includes("failed to fetch");
+}
+
+async function runSynchronousGeneration(payload, statusLabel = "Переключение на прямую генерацию...") {
+  state.job.fallbackInProgress = true;
+  state.job.id = null;
+  state.job.status = "running";
+
+  refs.progressBlock.classList.remove("hidden");
+  refs.progressStatusLabel.textContent = statusLabel;
+  refs.progressText.textContent = "...";
+  refs.progressFill.style.width = "12%";
+  refs.progressCount.textContent = "Выполняется генерация...";
+
+  try {
+    const result = await api("/api/generate", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    const done = Number(result.metadata?.totalQuestions || 0);
+    const planned = Number(result.metadata?.plannedQuestions || done);
+    const duplicatesSkipped = Number(result.metadata?.duplicatesSkipped || 0);
+    const terminalStatus = String(result.status || "completed");
+
+    refs.progressStatusLabel.textContent = terminalStatus === "completed_with_errors" ? "Завершено с замечаниями" : "Готово ✓";
+    refs.progressText.textContent = "100%";
+    refs.progressFill.style.width = "100%";
+    refs.progressCount.textContent = duplicatesSkipped > 0
+      ? `${done} из ${planned} вопросов · убрано дублей: ${duplicatesSkipped}`
+      : `${done} из ${planned} вопросов`;
+
+    state.job.status = terminalStatus;
+    showResult(result, { scroll: false });
+  } finally {
+    state.job.fallbackInProgress = false;
+  }
+}
+
 function mergeLiveResult(payload) {
   const previous = state.job.result || { metadata: {}, questionsByLanguage: {} };
   const merged = {
@@ -444,7 +494,7 @@ async function fetchResultIfReady() {
 }
 
 async function pollStatus() {
-  if (!state.job.id) return;
+  if (!state.job.id || state.job.fallbackInProgress) return;
 
   try {
     const status = await api(`/api/status?id=${encodeURIComponent(state.job.id)}`, { method: "GET" });
@@ -478,9 +528,28 @@ async function pollStatus() {
       }
     }
   } catch (error) {
+    if (isJobStorageUnavailableError(error) && state.job.requestPayload && !state.job.fallbackInProgress) {
+      if (state.job.pollTimer) {
+        clearInterval(state.job.pollTimer);
+        state.job.pollTimer = null;
+      }
+      clearFormError();
+      try {
+        await runSynchronousGeneration(state.job.requestPayload, "Сервер не хранит live-сессию, выполняю прямую генерацию...");
+      } catch (fallbackError) {
+        setFormError(fallbackError instanceof Error ? fallbackError.message : "Не удалось выполнить генерацию.");
+        refs.progressBlock.classList.add("hidden");
+      } finally {
+        setRunningUi(false);
+      }
+      return;
+    }
+
     setFormError(error instanceof Error ? error.message : "Ошибка получения статуса.");
-    clearInterval(state.job.pollTimer);
-    state.job.pollTimer = null;
+    if (state.job.pollTimer) {
+      clearInterval(state.job.pollTimer);
+      state.job.pollTimer = null;
+    }
     setRunningUi(false);
   }
 }
@@ -495,6 +564,8 @@ async function startGeneration() {
   }
   state.job.id = null;
   state.job.status = "idle";
+  state.job.requestPayload = null;
+  state.job.fallbackInProgress = false;
   validateForm();
   if (refs.generateBtn.disabled) {
     setFormError("Заполните обязательные поля: предмет, факультет, темы, языки, количество вопросов.");
@@ -510,6 +581,7 @@ async function startGeneration() {
 
   try {
     const payload = currentPayload();
+    state.job.requestPayload = payload;
     const started = await api("/api/start", {
       method: "POST",
       body: JSON.stringify(payload)
@@ -548,8 +620,18 @@ async function startGeneration() {
       state.job.pollTimer = setInterval(pollStatus, 1200);
     }
   } catch (error) {
-    setFormError(error instanceof Error ? error.message : "Не удалось выполнить генерацию.");
-    refs.progressBlock.classList.add("hidden");
+    if (state.job.requestPayload && shouldFallbackToSync(error)) {
+      clearFormError();
+      try {
+        await runSynchronousGeneration(state.job.requestPayload, "Переключение на прямую генерацию...");
+      } catch (fallbackError) {
+        setFormError(fallbackError instanceof Error ? fallbackError.message : "Не удалось выполнить генерацию.");
+        refs.progressBlock.classList.add("hidden");
+      }
+    } else {
+      setFormError(error instanceof Error ? error.message : "Не удалось выполнить генерацию.");
+      refs.progressBlock.classList.add("hidden");
+    }
   } finally {
     if (!state.job.pollTimer && !["running", "cancelling"].includes(state.job.status)) {
       setRunningUi(false);
@@ -635,6 +717,8 @@ function resetForm() {
   state.topics = [];
   state.job.id = null;
   state.job.status = "idle";
+  state.job.requestPayload = null;
+  state.job.fallbackInProgress = false;
   if (state.job.pollTimer) {
     clearInterval(state.job.pollTimer);
     state.job.pollTimer = null;
