@@ -69,6 +69,95 @@ function buildBrevityHint(language, questionLength) {
   ].join("\n");
 }
 
+const DUPLICATE_STOPWORDS = new Set([
+  "и", "или", "в", "во", "на", "по", "к", "ко", "с", "со", "у", "о", "об", "от", "до", "из", "за", "для", "при",
+  "как", "что", "какой", "какая", "какие", "каково", "какова", "каковы", "чем", "почему", "когда",
+  "назовите", "перечислите", "укажите", "опишите", "объясните", "охарактеризуйте", "представьте",
+  "основные", "критерии", "классификацию", "классификация", "дифференциальной", "диагностики",
+  "имеющих", "имеющие", "имеющим", "значение", "клинические", "задачи", "задача", "детей", "ребенка", "ребенка",
+  "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "by", "from", "at",
+  "what", "which", "why", "how", "list", "describe", "explain", "name", "define"
+]);
+
+function normalizeQuestionForComparison(question) {
+  return sanitizeQuestionText(question)
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeQuestionForComparison(question) {
+  return normalizeQuestionForComparison(question)
+    .split(" ")
+    .filter((token) => token.length >= 3 && !DUPLICATE_STOPWORDS.has(token));
+}
+
+function buildTrigramSet(text) {
+  const normalized = normalizeQuestionForComparison(text).replace(/\s+/g, "");
+  const set = new Set();
+  if (normalized.length < 3) return set;
+  for (let i = 0; i <= normalized.length - 3; i++) {
+    set.add(normalized.slice(i, i + 3));
+  }
+  return set;
+}
+
+function trigramDiceCoefficient(a, b) {
+  const aSet = buildTrigramSet(a);
+  const bSet = buildTrigramSet(b);
+  if (aSet.size === 0 || bSet.size === 0) return 0;
+  let intersection = 0;
+  for (const token of aSet) {
+    if (bSet.has(token)) intersection += 1;
+  }
+  return (2 * intersection) / (aSet.size + bSet.size);
+}
+
+function areQuestionsSemanticallyDuplicate(a, b) {
+  const normA = normalizeQuestionForComparison(a);
+  const normB = normalizeQuestionForComparison(b);
+  if (!normA || !normB) return false;
+  if (normA === normB) return true;
+  if (normA.length > 20 && normB.length > 20 && (normA.includes(normB) || normB.includes(normA))) {
+    return true;
+  }
+
+  const tokensA = new Set(tokenizeQuestionForComparison(normA));
+  const tokensB = new Set(tokenizeQuestionForComparison(normB));
+  if (tokensA.size > 0 && tokensB.size > 0) {
+    let intersection = 0;
+    for (const token of tokensA) {
+      if (tokensB.has(token)) intersection += 1;
+    }
+    const minSize = Math.min(tokensA.size, tokensB.size);
+    const unionSize = tokensA.size + tokensB.size - intersection;
+    const overlap = minSize > 0 ? intersection / minSize : 0;
+    const jaccard = unionSize > 0 ? intersection / unionSize : 0;
+    if ((intersection >= 3 && overlap >= 0.8) || jaccard >= 0.68) {
+      return true;
+    }
+  }
+
+  return trigramDiceCoefficient(normA, normB) >= 0.86;
+}
+
+export function isQuestionSemanticallyDuplicate(question, existingQuestions) {
+  if (!question || !Array.isArray(existingQuestions) || existingQuestions.length === 0) return false;
+  return existingQuestions.some((existing) => areQuestionsSemanticallyDuplicate(question, existing));
+}
+
+function buildDuplicateAvoidanceHint(bannedQuestions) {
+  if (!Array.isArray(bannedQuestions) || bannedQuestions.length === 0) return "";
+  const lastItems = bannedQuestions.slice(-12).map((q, i) => `${i + 1}. ${sanitizeQuestionText(q)}`);
+  return [
+    "STRICT NO-DUPLICATES: each new question must be semantically different from the examples below.",
+    "Change clinical focus/mechanism/criterion, not just word order.",
+    ...lastItems
+  ].join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -295,14 +384,16 @@ export function parseNumberedList(text) {
   return questions;
 }
 
-export async function generateFast(task, context) {
+export async function generateFast(task, context, bannedQuestions = []) {
   const systemPrompt = buildSystemPrompt(context);
+  const duplicateHint = buildDuplicateAvoidanceHint(bannedQuestions);
   const userPrompt = `Ð¢ÐµÐ¼Ð°: ${task.topic}
 Ð£Ñ€Ð¾Ð²ÐµÐ½ÑŒ ÑÐ»Ð¾Ð¶Ð½Ð¾ÑÑ‚Ð¸: ${LEVEL_LABELS.RU[task.level]} â€” ${buildLevelDescription(task.level)}
 ÐšÐ¾Ð»Ð¸Ñ‡ÐµÑÑ‚Ð²Ð¾ Ð·Ð°Ð´Ð°Ð½Ð¸Ð¹: ${task.count}
 Ð¯Ð·Ñ‹Ðº: ÑÑ„Ð¾Ñ€Ð¼ÑƒÐ»Ð¸Ñ€ÑƒÐ¹ Ð²ÑÐµ Ð·Ð°Ð´Ð°Ð½Ð¸Ñ Ð½Ð° ${LANG_NAMES[task.language] || task.language}.
 ${buildFastTypeHint(context.questionTypes || ["knowledge", "understanding"], task.count)}
 ${buildBrevityHint(task.language, context.questionLength)}
+${duplicateHint}
 Ð¤Ð¾Ñ€Ð¼Ð°Ñ‚: Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð½ÑƒÐ¼ÐµÑ€Ð¾Ð²Ð°Ð½Ð½Ñ‹Ð¹ ÑÐ¿Ð¸ÑÐ¾Ðº (1. 2. 3. ...). Ð‘ÐµÐ· Ð·Ð°Ð³Ð¾Ð»Ð¾Ð²ÐºÐ¾Ð², Ð¿Ð¾ÑÑÐ½ÐµÐ½Ð¸Ð¹ Ð¸ Ð¾Ñ‚Ð²ÐµÑ‚Ð¾Ð².`;
 
   const text = await withRetry(() => callGemini(systemPrompt, userPrompt));
@@ -310,12 +401,13 @@ ${buildBrevityHint(task.language, context.questionLength)}
   const raw = (questions.length > 0 ? questions : text.split("\n").map((l) => l.trim()).filter(Boolean)).slice(0, task.count);
   return raw.map((question) => enforceQuestionBrevity(question, task.language, context.questionLength)).filter(Boolean);
 }
-export async function generateOneQuestionQuality(context, topic, level, language, index) {
+export async function generateOneQuestionQuality(context, topic, level, language, index, bannedQuestions = []) {
   const systemPrompt = buildSystemPrompt(context);
   const typeHintGen = buildQualityTypeHint(context.questionTypes || ["knowledge", "understanding"], index);
+  const duplicateHint = buildDuplicateAvoidanceHint(bannedQuestions);
 
   const draft = await withRetry(() => callGemini(systemPrompt,
-    `Ð¢ÐµÐ¼Ð°: ${topic}\nÐ£Ñ€Ð¾Ð²ÐµÐ½ÑŒ: ${LEVEL_LABELS.RU[level]} â€” ${buildLevelDescription(level)}\nÐ¡Ð¾ÑÑ‚Ð°Ð²ÑŒ Ñ€Ð¾Ð²Ð½Ð¾ 1 Ð·Ð°Ð´Ð°Ð½Ð¸Ðµ (â„–${index}).\n${typeHintGen}\n${buildBrevityHint(language, context.questionLength)}\nÐ¯Ð·Ñ‹Ðº: ${LANG_NAMES[language] || language}.\nÐ¤Ð¾Ñ€Ð¼Ð°Ñ‚: Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ñ‚ÐµÐºÑÑ‚ Ð·Ð°Ð´Ð°Ð½Ð¸Ñ Ð±ÐµÐ· Ð½ÑƒÐ¼ÐµÑ€Ð°Ñ†Ð¸Ð¸, Ð·Ð°Ð³Ð¾Ð»Ð¾Ð²ÐºÐ¾Ð² Ð¸ Ð¾Ñ‚Ð²ÐµÑ‚Ð¾Ð².`
+    `Ð¢ÐµÐ¼Ð°: ${topic}\nÐ£Ñ€Ð¾Ð²ÐµÐ½ÑŒ: ${LEVEL_LABELS.RU[level]} â€” ${buildLevelDescription(level)}\nÐ¡Ð¾ÑÑ‚Ð°Ð²ÑŒ Ñ€Ð¾Ð²Ð½Ð¾ 1 Ð·Ð°Ð´Ð°Ð½Ð¸Ðµ (â„–${index}).\n${typeHintGen}\n${buildBrevityHint(language, context.questionLength)}\n${duplicateHint}\nÐ¯Ð·Ñ‹Ðº: ${LANG_NAMES[language] || language}.\nÐ¤Ð¾Ñ€Ð¼Ð°Ñ‚: Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ñ‚ÐµÐºÑÑ‚ Ð·Ð°Ð´Ð°Ð½Ð¸Ñ Ð±ÐµÐ· Ð½ÑƒÐ¼ÐµÑ€Ð°Ñ†Ð¸Ð¸, Ð·Ð°Ð³Ð¾Ð»Ð¾Ð²ÐºÐ¾Ð² Ð¸ Ð¾Ñ‚Ð²ÐµÑ‚Ð¾Ð².`
   ));
 
   const criticSystem = `Ð¢Ñ‹ â€” ÑÑ‚Ñ€Ð¾Ð³Ð¸Ð¹ ÐºÑ€Ð¸Ñ‚Ð¸Ðº ÑÐºÐ·Ð°Ð¼ÐµÐ½Ð°Ñ†Ð¸Ð¾Ð½Ð½Ñ‹Ñ… Ð·Ð°Ð´Ð°Ð½Ð¸Ð¹ Ð´Ð»Ñ Ð¼ÐµÐ´Ð¸Ñ†Ð¸Ð½ÑÐºÐ¾Ð³Ð¾ Ð²ÑƒÐ·Ð°.
@@ -341,17 +433,40 @@ export async function generateOneQuestionQuality(context, topic, level, language
   }
 
   const edited = await withRetry(() => callGeminiLowTemp(
-    `Ð¢Ñ‹ â€” Ñ€ÐµÐ´Ð°ÐºÑ‚Ð¾Ñ€ ÑÐºÐ·Ð°Ð¼ÐµÐ½Ð°Ñ†Ð¸Ð¾Ð½Ð½Ñ‹Ñ… Ð·Ð°Ð´Ð°Ð½Ð¸Ð¹. Ð˜ÑÐ¿Ñ€Ð°Ð²ÑŒ Ð·Ð°Ð´Ð°Ð½Ð¸Ðµ Ð¿Ð¾ Ð·Ð°Ð¼ÐµÑ‡Ð°Ð½Ð¸ÑÐ¼ ÐºÑ€Ð¸Ñ‚Ð¸ÐºÐ°.\n${typeHintGen}\n${buildBrevityHint(language, context.questionLength)}\nÐ’ÐµÑ€Ð½Ð¸ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð¸ÑÐ¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð½Ñ‹Ð¹ Ñ‚ÐµÐºÑÑ‚ Ð±ÐµÐ· ÐºÐ¾Ð¼Ð¼ÐµÐ½Ñ‚Ð°Ñ€Ð¸ÐµÐ².`,
+    `Ð¢Ñ‹ â€” Ñ€ÐµÐ´Ð°ÐºÑ‚Ð¾Ñ€ ÑÐºÐ·Ð°Ð¼ÐµÐ½Ð°Ñ†Ð¸Ð¾Ð½Ð½Ñ‹Ñ… Ð·Ð°Ð´Ð°Ð½Ð¸Ð¹. Ð˜ÑÐ¿Ñ€Ð°Ð²ÑŒ Ð·Ð°Ð´Ð°Ð½Ð¸Ðµ Ð¿Ð¾ Ð·Ð°Ð¼ÐµÑ‡Ð°Ð½Ð¸ÑÐ¼ ÐºÑ€Ð¸Ñ‚Ð¸ÐºÐ°.\n${typeHintGen}\n${buildBrevityHint(language, context.questionLength)}\n${duplicateHint}\nÐ’ÐµÑ€Ð½Ð¸ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð¸ÑÐ¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð½Ñ‹Ð¹ Ñ‚ÐµÐºÑÑ‚ Ð±ÐµÐ· ÐºÐ¾Ð¼Ð¼ÐµÐ½Ñ‚Ð°Ñ€Ð¸ÐµÐ².`,
     `ÐŸÑ€ÐµÐ´Ð¼ÐµÑ‚: ${context.subject}. Ð¢ÐµÐ¼Ð°: ${topic}. Ð£Ñ€Ð¾Ð²ÐµÐ½ÑŒ: ${LEVEL_LABELS.RU[level]}. Ð¯Ð·Ñ‹Ðº: ${LANG_NAMES[language] || language}.\n\nÐ§ÐµÑ€Ð½Ð¾Ð²Ð¸Ðº:\n${draft}\n\nÐ—Ð°Ð¼ÐµÑ‡Ð°Ð½Ð¸Ñ:\n${criticism}\n\nÐ’ÐµÑ€Ð½Ð¸ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð¸ÑÐ¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð½Ñ‹Ð¹ Ñ‚ÐµÐºÑÑ‚.`
   ));
   return enforceQuestionBrevity((edited || draft).trim(), language, context.questionLength);
 }
-export async function generateQuality(task, context, onQuestion) {
+export async function generateQuality(task, context, onQuestion, options = {}) {
+  const isDuplicate = typeof options.isDuplicate === "function" ? options.isDuplicate : () => false;
+  const getBannedQuestions = typeof options.getBannedQuestions === "function"
+    ? options.getBannedQuestions
+    : () => [];
+  const onDuplicate = typeof options.onDuplicate === "function" ? options.onDuplicate : () => {};
+  const maxAttemptsPerQuestion = Math.max(1, Number(options.maxAttemptsPerQuestion) || 4);
+
   for (let i = 1; i <= task.count; i++) {
-    try {
-      const q = await generateOneQuestionQuality(context, task.topic, task.level, task.language, i); // eslint-disable-line no-await-in-loop
-      onQuestion(q);
-    } catch { /* skip on persistent failure */ }
+    let accepted = false;
+    for (let attempt = 0; attempt < maxAttemptsPerQuestion; attempt++) {
+      try {
+        const promptIndex = i + (attempt * task.count);
+        const banned = getBannedQuestions(task.language);
+        const q = await generateOneQuestionQuality(context, task.topic, task.level, task.language, promptIndex, banned); // eslint-disable-line no-await-in-loop
+        if (isDuplicate(q)) {
+          onDuplicate(q);
+          continue;
+        }
+        onQuestion(q);
+        accepted = true;
+        break;
+      } catch {
+        // keep retrying this slot
+      }
+    }
+    if (!accepted) {
+      // skip unresolved slot
+    }
   }
 }
 
@@ -393,7 +508,15 @@ export function createJob(normalizedPayload) {
     languages: normalizedPayload.languages,
     resultByLanguage: Object.fromEntries(normalizedPayload.languages.map((l) => [l, []])),
     errors: [],
-    progress: { totalTasks: tasks.length, completedTasks: 0, failedTasks: 0, totalQuestions, generatedQuestions: 0, byTopic }
+    progress: {
+      totalTasks: tasks.length,
+      completedTasks: 0,
+      failedTasks: 0,
+      totalQuestions,
+      generatedQuestions: 0,
+      duplicatesSkipped: 0,
+      byTopic
+    }
   };
 
   jobs.set(id, job);
@@ -407,27 +530,68 @@ export function createJob(normalizedPayload) {
   return job;
 }
 
+function appendQuestionIfUnique(job, task, question) {
+  const candidate = enforceQuestionBrevity(question, task.language, job.context.questionLength);
+  if (!candidate) return false;
+
+  const existing = job.resultByLanguage[task.language] || [];
+  if (isQuestionSemanticallyDuplicate(candidate, existing)) {
+    job.progress.duplicatesSkipped += 1;
+    return false;
+  }
+
+  existing.push(candidate);
+  job.progress.generatedQuestions += 1;
+  job.progress.byTopic[task.topic].generatedQuestions += 1;
+  return true;
+}
+
 async function processJob(job, tasks) {
   const concurrency = job.mode === "quality" ? 2 : 5;
   await runWithConcurrency(tasks, concurrency, async (task) => {
     if (job.cancelled) return;
     try {
       if (job.mode === "quality") {
+        let acceptedForTask = 0;
         await generateQuality(task, job.context, (q) => {
           if (job.cancelled) return;
-          job.resultByLanguage[task.language].push(q);
-          job.progress.generatedQuestions += 1;
-          job.progress.byTopic[task.topic].generatedQuestions += 1;
-          job.updatedAt = new Date().toISOString();
-        });
-      } else {
-        const questions = await generateFast(task, job.context);
-        if (!job.cancelled) {
-          for (const q of questions) {
-            job.resultByLanguage[task.language].push(q);
-            job.progress.generatedQuestions += 1;
-            job.progress.byTopic[task.topic].generatedQuestions += 1;
+          if (appendQuestionIfUnique(job, task, q)) {
+            acceptedForTask += 1;
+            job.updatedAt = new Date().toISOString();
           }
+        }, {
+          isDuplicate: (q) => isQuestionSemanticallyDuplicate(q, job.resultByLanguage[task.language]),
+          getBannedQuestions: () => job.resultByLanguage[task.language],
+          onDuplicate: () => { job.progress.duplicatesSkipped += 1; },
+          maxAttemptsPerQuestion: 4
+        });
+        if (acceptedForTask < task.count) {
+          job.errors.push({
+            task: { topic: task.topic, level: task.level, language: task.language },
+            message: `Недостаточно уникальных вопросов: ${acceptedForTask}/${task.count}.`
+          });
+        }
+      } else {
+        let acceptedForTask = 0;
+        let attempts = 0;
+        while (!job.cancelled && acceptedForTask < task.count && attempts < 4) {
+          const missing = task.count - acceptedForTask;
+          const requestCount = Math.min(missing + 2, Math.max(missing, missing * 2));
+          const questions = await generateFast({ ...task, count: requestCount }, job.context, job.resultByLanguage[task.language]);
+          for (const q of questions) {
+            if (job.cancelled) break;
+            if (appendQuestionIfUnique(job, task, q)) {
+              acceptedForTask += 1;
+            }
+            if (acceptedForTask >= task.count) break;
+          }
+          attempts += 1;
+        }
+        if (acceptedForTask < task.count) {
+          job.errors.push({
+            task: { topic: task.topic, level: task.level, language: task.language },
+            message: `Недостаточно уникальных вопросов: ${acceptedForTask}/${task.count}.`
+          });
         }
       }
       if (!job.cancelled) job.progress.completedTasks += 1;
@@ -440,16 +604,29 @@ async function processJob(job, tasks) {
 
   job.status = job.cancelled ? "cancelled"
     : job.progress.failedTasks > 0 && job.progress.completedTasks === 0 ? "failed"
-    : job.progress.failedTasks > 0 ? "completed_with_errors"
+    : (job.progress.failedTasks > 0 || job.errors.length > 0) ? "completed_with_errors"
     : "completed";
   job.updatedAt = new Date().toISOString();
 }
 
 export function jobStatusPayload(job) {
+  const metadata = {
+    subject: job.context.subject,
+    faculty: job.context.faculty,
+    course: job.context.course,
+    examType: job.context.examType,
+    mode: job.mode,
+    questionLength: job.context.questionLength || "short",
+    totalQuestions: job.progress.generatedQuestions,
+    plannedQuestions: job.progress.totalQuestions,
+    duplicatesSkipped: job.progress.duplicatesSkipped
+  };
   return {
     jobId: job.id, status: job.status, mode: job.mode,
     createdAt: job.createdAt, updatedAt: job.updatedAt,
     progress: { ...job.progress, byTopic: Object.entries(job.progress.byTopic).map(([topic, v]) => ({ topic, ...v })) },
+    metadata,
+    questionsByLanguage: job.resultByLanguage,
     errors: job.errors
   };
 }
@@ -464,7 +641,9 @@ export function jobResultPayload(job) {
       examType: job.context.examType,
       mode: job.mode,
       questionLength: job.context.questionLength || "short",
-      totalQuestions: job.progress.generatedQuestions
+      totalQuestions: job.progress.generatedQuestions,
+      plannedQuestions: job.progress.totalQuestions,
+      duplicatesSkipped: job.progress.duplicatesSkipped
     },
     questionsByLanguage: job.resultByLanguage
   };

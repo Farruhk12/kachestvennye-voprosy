@@ -7,11 +7,12 @@ export default function handler(req, res) {
 
   const jobId = req.query.id;
   if (!jobId) return res.status(400).json({ error: "id обязателен" });
+  const allowPartial = ["1", "true", "yes"].includes(String(req.query.allowPartial || "").toLowerCase());
 
   const job = jobs.get(jobId);
   if (!job) return res.status(404).json({ error: "Job not found" });
 
-  if (!["completed", "completed_with_errors", "cancelled"].includes(job.status)) {
+  if (!allowPartial && !["completed", "completed_with_errors", "cancelled"].includes(job.status)) {
     return res.status(409).json({ error: "Result is not ready yet", status: job.status });
   }
 

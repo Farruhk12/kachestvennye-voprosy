@@ -288,7 +288,9 @@ function renderProgress(statusPayload) {
 
   const total = progress.totalQuestions || 0;
   const done = progress.generatedQuestions || 0;
-  const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+  const duplicatesSkipped = progress.duplicatesSkipped || 0;
+  const shouldForceFullBar = ["completed", "completed_with_errors", "cancelled"].includes(statusPayload.status);
+  const percent = shouldForceFullBar ? 100 : (total > 0 ? Math.round((done / total) * 100) : 0);
 
   const statusLabel = {
     running: statusPayload.mode === "quality" ? "Генерация · цепочка агентов..." : "Генерация...",
@@ -302,7 +304,9 @@ function renderProgress(statusPayload) {
   refs.progressStatusLabel.textContent = statusLabel;
   refs.progressText.textContent = `${percent}%`;
   refs.progressFill.style.width = `${percent}%`;
-  refs.progressCount.textContent = `${done} из ${total} вопросов`;
+  refs.progressCount.textContent = duplicatesSkipped > 0
+    ? `${done} из ${total} вопросов · убрано дублей: ${duplicatesSkipped}`
+    : `${done} из ${total} вопросов`;
 
   // Topic mini-progress bars
   refs.topicStatusGrid.innerHTML = "";
@@ -377,15 +381,19 @@ function renderLanguageTabs() {
   }
 }
 
-function showResult(resultPayload) {
+function showResult(resultPayload, options = {}) {
+  const previousLanguage = state.job.activeLanguage;
   state.job.result = resultPayload;
   const languages = availableResultLanguages(resultPayload);
-  state.job.activeLanguage = languages[0] || "RU";
+  state.job.activeLanguage = languages.includes(previousLanguage) ? previousLanguage : (languages[0] || "RU");
 
+  const wasHidden = refs.resultsSection.classList.contains("hidden");
   refs.resultsSection.classList.remove("hidden");
   renderLanguageTabs();
   renderResultQuestions();
-  setTimeout(() => refs.resultsSection.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+  if (options.scroll !== false && wasHidden) {
+    setTimeout(() => refs.resultsSection.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+  }
 }
 
 function clearResult() {
@@ -414,18 +422,44 @@ async function api(url, options = {}) {
   return payload;
 }
 
+function mergeLiveResult(payload) {
+  const previous = state.job.result || { metadata: {}, questionsByLanguage: {} };
+  const merged = {
+    jobId: payload.jobId || previous.jobId || state.job.id,
+    status: payload.status || previous.status || state.job.status,
+    metadata: { ...(previous.metadata || {}), ...(payload.metadata || {}) },
+    questionsByLanguage: payload.questionsByLanguage || previous.questionsByLanguage || {}
+  };
+  showResult(merged, { scroll: false });
+}
+
+async function fetchResult(allowPartial = false) {
+  const query = allowPartial ? "&allowPartial=1" : "";
+  return api(`/api/result?id=${encodeURIComponent(state.job.id)}${query}`, { method: "GET" });
+}
+
 async function fetchResultIfReady() {
-  const result = await api(`/api/generate/${state.job.id}/result`, { method: "GET" });
-  showResult(result);
+  const result = await fetchResult(false);
+  showResult(result, { scroll: false });
 }
 
 async function pollStatus() {
   if (!state.job.id) return;
 
   try {
-    const status = await api(`/api/generate/${state.job.id}/status`, { method: "GET" });
+    const status = await api(`/api/status?id=${encodeURIComponent(state.job.id)}`, { method: "GET" });
     state.job.status = status.status;
     renderProgress(status);
+    if (status.questionsByLanguage) {
+      mergeLiveResult(status);
+    } else {
+      try {
+        const partial = await fetchResult(true);
+        mergeLiveResult(partial);
+      } catch {
+        // ignore until first partial appears
+      }
+    }
 
     const terminal = ["completed", "completed_with_errors", "cancelled", "failed"].includes(status.status);
     if (!terminal) {
@@ -437,7 +471,11 @@ async function pollStatus() {
     setRunningUi(false);
 
     if (["completed", "completed_with_errors", "cancelled"].includes(status.status)) {
-      await fetchResultIfReady();
+      try {
+        await fetchResultIfReady();
+      } catch {
+        // Keep the latest partial result if final payload is temporarily unavailable.
+      }
     }
   } catch (error) {
     setFormError(error instanceof Error ? error.message : "Ошибка получения статуса.");
@@ -451,6 +489,12 @@ async function startGeneration() {
   clearFormError();
   clearResult();
   resetProgressUI();
+  if (state.job.pollTimer) {
+    clearInterval(state.job.pollTimer);
+    state.job.pollTimer = null;
+  }
+  state.job.id = null;
+  state.job.status = "idle";
   validateForm();
   if (refs.generateBtn.disabled) {
     setFormError("Заполните обязательные поля: предмет, факультет, темы, языки, количество вопросов.");
@@ -460,36 +504,68 @@ async function startGeneration() {
   setRunningUi(true);
   refs.progressBlock.classList.remove("hidden");
   refs.progressStatusLabel.textContent = "Генерация...";
-  refs.progressText.textContent = "...";
-
-  // Animate indeterminate bar while waiting
-  refs.progressFill.style.width = "100%";
-  refs.progressFill.style.opacity = "0.4";
+  refs.progressText.textContent = "0%";
+  refs.progressFill.style.width = "0%";
+  refs.progressCount.textContent = "Подготовка задачи...";
 
   try {
-    const result = await api("/api/generate", {
+    const payload = currentPayload();
+    const started = await api("/api/start", {
       method: "POST",
-      body: JSON.stringify(currentPayload())
+      body: JSON.stringify(payload)
     });
 
-    refs.progressFill.style.opacity = "1";
-    refs.progressStatusLabel.textContent = "Готово ✓";
-    refs.progressText.textContent = "100%";
-    refs.progressCount.textContent = `${result.metadata?.totalQuestions || 0} вопросов`;
+    state.job.id = started.jobId;
+    state.job.status = started.status || "running";
 
-    state.job.result = result;
-    showResult(result);
+    const initialQuestions = Object.fromEntries(payload.languages.map((lang) => [lang, []]));
+    mergeLiveResult({
+      jobId: started.jobId,
+      status: started.status || "running",
+      metadata: {
+        subject: payload.context.subject,
+        faculty: payload.context.faculty,
+        course: payload.context.course,
+        examType: payload.context.examType,
+        mode: payload.context.mode,
+        questionLength: payload.context.questionLength,
+        totalQuestions: 0,
+        plannedQuestions: started.progress?.totalQuestions || 0
+      },
+      questionsByLanguage: initialQuestions
+    });
+
+    if (started.progress) {
+      renderProgress(started);
+    }
+
+    await pollStatus();
+    if (state.job.pollTimer) {
+      clearInterval(state.job.pollTimer);
+      state.job.pollTimer = null;
+    }
+    if (["running", "cancelling"].includes(state.job.status)) {
+      state.job.pollTimer = setInterval(pollStatus, 1200);
+    }
   } catch (error) {
     setFormError(error instanceof Error ? error.message : "Не удалось выполнить генерацию.");
     refs.progressBlock.classList.add("hidden");
   } finally {
-    setRunningUi(false);
-    refs.progressFill.style.opacity = "1";
+    if (!state.job.pollTimer && !["running", "cancelling"].includes(state.job.status)) {
+      setRunningUi(false);
+    }
   }
 }
 
-function cancelGeneration() {
-  // No-op: synchronous generation cannot be cancelled mid-flight
+async function cancelGeneration() {
+  if (!state.job.id || !["running", "cancelling"].includes(state.job.status)) return;
+  try {
+    const payload = await api(`/api/cancel?id=${encodeURIComponent(state.job.id)}`, { method: "POST" });
+    state.job.status = payload.status || "cancelling";
+    refs.progressStatusLabel.textContent = "Отмена...";
+  } catch (error) {
+    setFormError(error instanceof Error ? error.message : "Не удалось отменить генерацию.");
+  }
 }
 
 async function copyCurrentLanguage() {

@@ -1,4 +1,4 @@
-import { normalizeStartPayload, createJob } from "./_lib.js";
+import { normalizeStartPayload, createJob, jobStatusPayload } from "./_lib.js";
 
 export default function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -10,5 +10,5 @@ export default function handler(req, res) {
   if (!normalized.ok) return res.status(400).json({ error: normalized.message });
 
   const job = createJob(normalized.value);
-  return res.status(202).json({ jobId: job.id, status: job.status, progress: job.progress });
+  return res.status(202).json(jobStatusPayload(job));
 }

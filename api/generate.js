@@ -4,9 +4,9 @@
  * Vercel max duration: 60s (hobby) / 300s (pro) — set in vercel.json
  */
 import {
-  normalizeStartPayload, LEVELS, LANGUAGES, LEVEL_LABELS, LANG_NAMES,
+  normalizeStartPayload, LEVELS,
   generateFast, generateOneQuestionQuality,
-  withRetry, runWithConcurrency
+  runWithConcurrency, isQuestionSemanticallyDuplicate
 } from "./_lib.js";
 
 export const config = { maxDuration: 60 };
@@ -35,33 +35,85 @@ export default async function handler(req, res) {
 
   const resultByLanguage = Object.fromEntries(languages.map((l) => [l, []]));
   const errors = [];
+  let duplicatesSkipped = 0;
   const concurrency = context.mode === "quality" ? 2 : 5;
 
   await runWithConcurrency(tasks, concurrency, async (task) => {
     try {
       if (context.mode === "quality") {
-        for (let i = 1; i <= task.count; i++) {
+        let accepted = 0;
+        let attempts = 0;
+        const maxAttempts = task.count * 4;
+        while (accepted < task.count && attempts < maxAttempts) {
           try {
-            const q = await generateOneQuestionQuality(context, task.topic, task.level, task.language, i); // eslint-disable-line no-await-in-loop
+            const banned = resultByLanguage[task.language].slice(-12);
+            const q = await generateOneQuestionQuality(
+              context,
+              task.topic,
+              task.level,
+              task.language,
+              attempts + 1,
+              banned
+            ); // eslint-disable-line no-await-in-loop
+            if (isQuestionSemanticallyDuplicate(q, resultByLanguage[task.language])) {
+              duplicatesSkipped += 1;
+              attempts += 1;
+              continue;
+            }
             resultByLanguage[task.language].push(q);
-          } catch { /* skip */ }
+            accepted += 1;
+            attempts += 1;
+          } catch {
+            attempts += 1;
+          }
+        }
+        if (accepted < task.count) {
+          errors.push({
+            task: { topic: task.topic, level: task.level, language: task.language },
+            message: `Недостаточно уникальных вопросов: ${accepted}/${task.count}.`
+          });
         }
       } else {
-        const questions = await generateFast(task, context);
-        for (const q of questions) resultByLanguage[task.language].push(q);
+        let accepted = 0;
+        let attempts = 0;
+        while (accepted < task.count && attempts < 4) {
+          const missing = task.count - accepted;
+          const requestCount = Math.min(missing + 2, Math.max(missing, missing * 2));
+          const questions = await generateFast({ ...task, count: requestCount }, context, resultByLanguage[task.language]);
+          for (const q of questions) {
+            if (isQuestionSemanticallyDuplicate(q, resultByLanguage[task.language])) {
+              duplicatesSkipped += 1;
+              continue;
+            }
+            resultByLanguage[task.language].push(q);
+            accepted += 1;
+            if (accepted >= task.count) break;
+          }
+          attempts += 1;
+        }
+        if (accepted < task.count) {
+          errors.push({
+            task: { topic: task.topic, level: task.level, language: task.language },
+            message: `Недостаточно уникальных вопросов: ${accepted}/${task.count}.`
+          });
+        }
       }
     } catch (error) {
       errors.push({ task: { topic: task.topic, level: task.level, language: task.language }, message: error instanceof Error ? error.message : "Error" });
     }
   });
 
+  const plannedTotal = topics.reduce((sum, topic) => (
+    sum + (topic.counts.easy + topic.counts.medium + topic.counts.hard) * languages.length
+  ), 0);
   const totalGenerated = Object.values(resultByLanguage).reduce((s, arr) => s + arr.length, 0);
 
   return res.status(200).json({
     status: errors.length > 0 && totalGenerated === 0 ? "failed" : errors.length > 0 ? "completed_with_errors" : "completed",
     metadata: {
       subject: context.subject, faculty: context.faculty, course: context.course,
-      examType: context.examType, mode: context.mode, totalQuestions: totalGenerated
+      examType: context.examType, mode: context.mode, questionLength: context.questionLength || "short",
+      totalQuestions: totalGenerated, plannedQuestions: plannedTotal, duplicatesSkipped
     },
     questionsByLanguage: resultByLanguage,
     errors
