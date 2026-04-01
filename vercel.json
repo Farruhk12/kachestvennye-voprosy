@@ -1,15 +1,9 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "backend/server.js",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "backend/server.js"
-    }
+  "rewrites": [
+    { "source": "/api/generate/start", "destination": "/api/start" },
+    { "source": "/api/generate/:id/status", "destination": "/api/status?id=:id" },
+    { "source": "/api/generate/:id/result", "destination": "/api/result?id=:id" },
+    { "source": "/api/generate/:id/cancel", "destination": "/api/cancel?id=:id" },
+    { "source": "/api/export/docx", "destination": "/api/export" }
   ]
 }

@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Как это работает — Качественные вопросы</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+
+    <!-- ===== NAVBAR ===== -->
+    <nav class="navbar">
+      <div class="navbar-inner">
+        <a class="navbar-brand" href="./index.html">
+          <div class="brand-logo">КВ</div>
+          <span class="brand-name">Качественные <span class="brand-accent">вопросы</span></span>
+        </a>
+        <div class="navbar-links">
+          <a href="./how-it-works.html" class="nav-active">Как это работает</a>
+          <a href="./generator.html" class="btn-nav">Создать вопросы</a>
+        </div>
+      </div>
+    </nav>
+
+    <!-- ===== PAGE HEADER ===== -->
+    <div class="page-hero">
+      <div class="section-inner">
+        <div class="page-breadcrumb">
+          <a href="./index.html">Главная</a>
+          <span>/</span>
+          <span>Как это работает</span>
+        </div>
+        <h1 class="page-hero-title">Как это работает</h1>
+        <p class="page-hero-sub">Каждый вопрос проходит трёхступенчатую систему контроля качества прежде чем попасть в итоговый список</p>
+      </div>
+    </div>
+
+    <!-- ===== CONTENT ===== -->
+    <section class="page-section section-how">
+      <div class="section-inner">
+
+        <!-- Pipeline -->
+        <div class="block-section">
+          <h2 class="block-title">
+            <span class="block-title-num">3</span>
+            агента в цепочке
+          </h2>
+          <div class="pipeline-wrap" style="margin-bottom:0">
+            <div class="pipeline">
+              <div class="pipeline-step">
+                <div class="pipeline-num">01</div>
+                <div class="pipeline-icon-wrap gen-color">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+                </div>
+                <h3>Агент-Генератор</h3>
+                <p class="pipeline-model">Gemini 2.5 Flash · temp 0.7</p>
+                <p>Получает все параметры: предмет, курс, факультет, тип экзамена, тему, уровень сложности и тип вопроса. Создаёт черновой вариант задания.</p>
+              </div>
+
+              <div class="pipeline-conn">
+                <div class="pipeline-line"></div>
+                <div class="pipeline-arrow-icon">→</div>
+                <div class="pipeline-line"></div>
+              </div>
+
+              <div class="pipeline-step">
+                <div class="pipeline-num">02</div>
+                <div class="pipeline-icon-wrap critic-color">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+                </div>
+                <h3>Агент-Критик</h3>
+                <p class="pipeline-model">Gemini 2.5 Flash · temp 0.2</p>
+                <p>Проверяет черновик по чеклисту из 8 критериев. При одобрении — вопрос сразу идёт в список. При замечаниях — передаётся редактору.</p>
+              </div>
+
+              <div class="pipeline-conn">
+                <div class="pipeline-line"></div>
+                <div class="pipeline-arrow-icon">→</div>
+                <div class="pipeline-line"></div>
+              </div>
+
+              <div class="pipeline-step">
+                <div class="pipeline-num">03</div>
+                <div class="pipeline-icon-wrap editor-color">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                </div>
+                <h3>Агент-Редактор</h3>
+                <p class="pipeline-model">Gemini 2.5 Flash · temp 0.2</p>
+                <p>Получает черновик и список замечаний критика. Исправляет все нарушения и возвращает финальную версию вопроса.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Checklist -->
+        <div class="block-section">
+          <h2 class="block-title">
+            <span class="block-title-num">8</span>
+            критериев проверки каждого вопроса
+          </h2>
+          <div class="checklist-grid">
+            <div class="checklist-item">
+              <span class="check-num">01</span>
+              <div>
+                <strong>Медицинская корректность</strong>
+                <p>Нет фактических ошибок, устаревших данных, вымышленных препаратов или несуществующих диагнозов</p>
+              </div>
+            </div>
+            <div class="checklist-item">
+              <span class="check-num">02</span>
+              <div>
+                <strong>Соответствие уровню сложности</strong>
+                <p>Лёгкий / Средний / Сложный — уровень должен точно соответствовать заданному критерию</p>
+              </div>
+            </div>
+            <div class="checklist-item">
+              <span class="check-num">03</span>
+              <div>
+                <strong>Соответствие курсу и факультету</strong>
+                <p>Требует знаний именно того уровня подготовки, который указан. 1–2 курс ≠ 5–6 курс</p>
+              </div>
+            </div>
+            <div class="checklist-item">
+              <span class="check-num">04</span>
+              <div>
+                <strong>Отсутствие подсказки</strong>
+                <p>Текст вопроса не содержит намёков на правильный ответ в формулировке или структуре</p>
+              </div>
+            </div>
+            <div class="checklist-item">
+              <span class="check-num">05</span>
+              <div>
+                <strong>Однозначность</strong>
+                <p>Есть чёткий единственно правильный ответ. Формулировка не допускает двойного толкования</p>
+              </div>
+            </div>
+            <div class="checklist-item">
+              <span class="check-num">06</span>
+              <div>
+                <strong>Самодостаточность</strong>
+                <p>Вопрос понятен без дополнительного контекста, учебника или других материалов</p>
+              </div>
+            </div>
+            <div class="checklist-item">
+              <span class="check-num">07</span>
+              <div>
+                <strong>Актуальность</strong>
+                <p>Опирается на современные клинические протоколы и стандарты, не на устаревшие классификации</p>
+              </div>
+            </div>
+            <div class="checklist-item">
+              <span class="check-num">08</span>
+              <div>
+                <strong>Соответствие типу задания</strong>
+                <p>Вопрос на знание, понимание или клиническая задача — строго по выбранному типу</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Types -->
+        <div class="block-section">
+          <h2 class="block-title">Три типа заданий</h2>
+          <div class="types-grid">
+            <div class="type-card type-k">
+              <div class="type-letter">К</div>
+              <h4>Знание</h4>
+              <p>Воспроизведение фактов, определений, классификаций и нормальных показателей</p>
+              <div class="type-tags">
+                <span>«Что такое...»</span>
+                <span>«Перечислите...»</span>
+                <span>«Какова норма...»</span>
+                <span>«Назовите классификацию...»</span>
+              </div>
+            </div>
+            <div class="type-card type-p">
+              <div class="type-letter">П</div>
+              <h4>Понимание</h4>
+              <p>Объяснение механизмов, патогенеза, причинно-следственных связей и сравнений</p>
+              <div class="type-tags">
+                <span>«Объясните механизм...»</span>
+                <span>«Почему...»</span>
+                <span>«Чем отличается...»</span>
+                <span>«Каков патогенез...»</span>
+              </div>
+            </div>
+            <div class="type-card type-z">
+              <div class="type-letter">З</div>
+              <h4>Клинические задачи</h4>
+              <p>Конкретный пациент с симптомами и данными → вопрос требующий клинического решения</p>
+              <div class="type-tags">
+                <span>«У ребёнка X лет...»</span>
+                <span>«Пациент поступил с...»</span>
+                <span>«Ваш диагноз?»</span>
+                <span>«Назначьте лечение»</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Levels -->
+        <div class="block-section">
+          <h2 class="block-title">Уровни сложности</h2>
+          <div class="levels-grid">
+            <div class="level-card">
+              <div class="level-dot easy-dot"></div>
+              <div class="level-badge easy-badge">Лёгкий</div>
+              <p>Типичный, классический случай. Один правильный ответ очевиден при знании материала. Проверяет базовые знания, стандартные алгоритмы и нормальные показатели.</p>
+            </div>
+            <div class="level-card">
+              <div class="level-dot medium-dot"></div>
+              <div class="level-badge medium-badge">Средний</div>
+              <p>Нетипичная картина, сочетание факторов, выбор из нескольких близких вариантов. Проверяет умение анализировать и проводить дифференциальный анализ.</p>
+            </div>
+            <div class="level-card">
+              <div class="level-dot hard-dot"></div>
+              <div class="level-badge hard-badge">Сложный</div>
+              <p>Редкий вариант, конфликт данных, критическая ситуация. Проверяет клиническое мышление, синтез знаний и принятие решений в условиях неопределённости.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- CTA -->
+        <div class="how-cta">
+          <a href="./generator.html" class="btn-primary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Перейти к созданию вопросов
+          </a>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ===== FOOTER ===== -->
+    <footer class="footer">
+      <div class="footer-inner">
+        <div class="footer-brand">
+          <div class="brand-logo">КВ</div>
+          <div>
+            <div class="footer-site-name">Качественные вопросы</div>
+            <div class="footer-desc">AI-генератор экзаменационных вопросов для медицинских вузов</div>
+          </div>
+        </div>
+        <div class="footer-author">
+          <span class="footer-author-label">Автор</span>
+          <span class="footer-author-name">Бакоев Фаррух</span>
+        </div>
+      </div>
+    </footer>
+
+  </body>
+</html>
