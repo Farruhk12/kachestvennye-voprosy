@@ -12,6 +12,63 @@ export const LANG_NAMES = { RU: "русском языке", TJ: "таджикс
 // In-memory job store (shared across handlers in same serverless instance)
 export const jobs = new Map();
 
+const QUESTION_LENGTH_PROFILES = {
+  short: { words: { RU: 16, TJ: 16, EN: 14 }, answerMinutes: "2-4" },
+  standard: { words: { RU: 24, TJ: 24, EN: 20 }, answerMinutes: "4-6" },
+  detailed: { words: { RU: 34, TJ: 34, EN: 30 }, answerMinutes: "6-8" }
+};
+
+function normalizeQuestionLength(value) {
+  const mode = String(value || "short").toLowerCase();
+  return Object.prototype.hasOwnProperty.call(QUESTION_LENGTH_PROFILES, mode) ? mode : "short";
+}
+
+function getWordLimit(language, questionLength) {
+  const profile = QUESTION_LENGTH_PROFILES[normalizeQuestionLength(questionLength)];
+  const lang = String(language || "RU").toUpperCase();
+  return profile.words[lang] || profile.words.RU;
+}
+
+function getAnswerMinutes(questionLength) {
+  return QUESTION_LENGTH_PROFILES[normalizeQuestionLength(questionLength)].answerMinutes;
+}
+
+function sanitizeQuestionText(question) {
+  return String(question || "")
+    .replace(/^\s*\d+[\.\)]\s*/, "")
+    .replace(/\s+/g, " ")
+    .replace(/[;:]\s*/g, ", ")
+    .trim();
+}
+
+function enforceQuestionBrevity(question, language, questionLength) {
+  let clean = sanitizeQuestionText(question);
+  if (!clean) return "";
+
+  const firstSentence = clean.match(/^(.+?[.?!])(?:\s|$)/);
+  if (firstSentence) clean = firstSentence[1].trim();
+
+  const maxWords = getWordLimit(language, questionLength);
+  const words = clean.split(/\s+/).filter(Boolean);
+  if (words.length > maxWords) {
+    clean = `${words.slice(0, maxWords).join(" ").replace(/[.,!?]+$/g, "").trim()}?`;
+  }
+
+  if (!/[.?!]$/.test(clean)) clean += "?";
+  return clean;
+}
+
+function buildBrevityHint(language, questionLength) {
+  const maxWords = getWordLimit(language, questionLength);
+  const answerMinutes = getAnswerMinutes(questionLength);
+  return [
+    `Strict brevity: one sentence only, up to ${maxWords} words.`,
+    `Keep it answerable in ${answerMinutes} minutes in oral exam.`,
+    "Do not use multi-part wording such as 'list, characterize, compare and justify' in one item.",
+    "For mini clinical cases: use only age + 1-2 key symptoms, no long narrative."
+  ].join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -28,6 +85,7 @@ export function normalizeStartPayload(payload) {
   const examType = String(context.examType ?? "").trim();
   const modeRaw = String(context.mode ?? "fast").toLowerCase();
   const mode = modeRaw === "quality" ? "quality" : "fast";
+  const questionLength = normalizeQuestionLength(context.questionLength);
   const VALID_QTYPES = ["knowledge", "understanding", "tasks"];
   const questionTypes = Array.isArray(context.questionTypes)
     ? [...new Set(context.questionTypes.map((x) => String(x).toLowerCase()))].filter((x) => VALID_QTYPES.includes(x))
@@ -62,7 +120,10 @@ export function normalizeStartPayload(payload) {
   if (normalizedTopics.length === 0) return { ok: false, message: "Добавьте минимум одну тему." };
   if (totalQ <= 0) return { ok: false, message: "Укажите количество вопросов больше нуля." };
 
-  return { ok: true, value: { context: { subject, faculty, examType, course, mode, questionTypes }, languages, topics: normalizedTopics } };
+  return {
+    ok: true,
+    value: { context: { subject, faculty, examType, course, mode, questionTypes, questionLength }, languages, topics: normalizedTopics }
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -181,41 +242,47 @@ export function buildLevelDescription(level) {
 
 export function buildFastTypeHint(questionTypes, count) {
   const has = (t) => questionTypes.includes(t);
-  if (has("tasks") && !has("knowledge") && !has("understanding"))
-    return `Каждый из ${count} элементов — отдельная КЛИНИЧЕСКАЯ ЗАДАЧА: описание пациента + вопрос требующий решения.`;
-  if (has("knowledge") && !has("understanding") && !has("tasks"))
-    return `Каждый из ${count} элементов — ВОПРОС НА ЗНАНИЕ: определение, классификация, норма. Без клинических случаев.`;
-  if (has("understanding") && !has("knowledge") && !has("tasks"))
-    return `Каждый из ${count} элементов — ВОПРОС НА ПОНИМАНИЕ: объяснение механизма, патогенеза. Без клинических случаев.`;
-  const labels = [];
-  if (has("knowledge")) labels.push("ЗНАНИЕ");
-  if (has("understanding")) labels.push("ПОНИМАНИЕ");
-  if (has("tasks")) labels.push("КЛИНИЧЕСКАЯ ЗАДАЧА");
-  return `Распредели ${count} заданий равномерно по типам: ${labels.join(", ")}.`;
-}
+  if (has("tasks") && !has("knowledge") && !has("understanding")) {
+    return `All ${count} items must be MINI clinical cases: age + 1-2 key symptoms, then one direct question. No long narratives or long lab panels.`;
+  }
+  if (has("knowledge") && !has("understanding") && !has("tasks")) {
+    return `All ${count} items must be direct recall questions (definition, criterion, normal value, indication).`;
+  }
+  if (has("understanding") && !has("knowledge") && !has("tasks")) {
+    return `All ${count} items must test mechanism/interpretation in one direct sentence.`;
+  }
 
+  const labels = [];
+  if (has("knowledge")) labels.push("knowledge");
+  if (has("understanding")) labels.push("understanding");
+  if (has("tasks")) labels.push("mini clinical case");
+  return `Distribute ${count} items evenly across selected types: ${labels.join(", ")}.`;
+}
 export function buildQualityTypeHint(questionTypes, index) {
   const has = (t) => questionTypes.includes(t);
-  if (has("tasks") && !has("knowledge") && !has("understanding"))
-    return `Это КЛИНИЧЕСКАЯ ЗАДАЧА: опиши конкретного пациента (возраст, пол, симптомы) + вопрос требующий клинического решения.`;
-  if (!has("tasks")) {
-    if (has("knowledge") && has("understanding"))
-      return index % 2 === 1
-        ? `Это ВОПРОС НА ЗНАНИЕ: спроси о факте, определении, классификации или норме. Без клинических случаев.`
-        : `Это ВОПРОС НА ПОНИМАНИЕ: спроси об объяснении механизма, патогенеза. Без клинических случаев.`;
-    if (has("knowledge")) return `Это ВОПРОС НА ЗНАНИЕ: факт, определение, классификация. Без клинических случаев.`;
-    return `Это ВОПРОС НА ПОНИМАНИЕ: механизм, патогенез, сравнение. Без клинических случаев.`;
+  if (has("tasks") && !has("knowledge") && !has("understanding")) {
+    return "This is a MINI clinical case: age + 1-2 key symptoms, then one direct question.";
   }
+
+  if (!has("tasks")) {
+    if (has("knowledge") && has("understanding")) {
+      return index % 2 === 1
+        ? "This is a direct knowledge question: one fact, definition, criterion, or normal value."
+        : "This is a direct understanding question: one mechanism or one interpretation point.";
+    }
+    if (has("knowledge")) return "This is a direct knowledge question: one fact, definition, criterion, or normal value.";
+    return "This is a direct understanding question: one mechanism or one interpretation point.";
+  }
+
   const types = [];
   if (has("knowledge")) types.push("knowledge");
   if (has("understanding")) types.push("understanding");
-  if (has("tasks")) types.push("tasks");
+  if (has("tasks")) types.push("mini clinical case");
   const pick = types[(index - 1) % types.length];
-  if (pick === "tasks") return `Это КЛИНИЧЕСКАЯ ЗАДАЧА: пациент с симптомами + вопрос.`;
-  if (pick === "knowledge") return `Это ВОПРОС НА ЗНАНИЕ: факт, определение, норма. Без клинических случаев.`;
-  return `Это ВОПРОС НА ПОНИМАНИЕ: механизм, патогенез. Без клинических случаев.`;
+  if (pick === "mini clinical case") return "This is a MINI clinical case: age + 1-2 key symptoms, then one direct question.";
+  if (pick === "knowledge") return "This is a direct knowledge question: one fact, definition, criterion, or normal value.";
+  return "This is a direct understanding question: one mechanism or one interpretation point.";
 }
-
 // ---------------------------------------------------------------------------
 // Generation
 // ---------------------------------------------------------------------------
@@ -230,52 +297,55 @@ export function parseNumberedList(text) {
 
 export async function generateFast(task, context) {
   const systemPrompt = buildSystemPrompt(context);
-  const userPrompt = `Тема: ${task.topic}
-Уровень сложности: ${LEVEL_LABELS.RU[task.level]} — ${buildLevelDescription(task.level)}
-Количество заданий: ${task.count}
-Язык: сформулируй все задания на ${LANG_NAMES[task.language] || task.language}.
+  const userPrompt = `Ð¢ÐµÐ¼Ð°: ${task.topic}
+Ð£Ñ€Ð¾Ð²ÐµÐ½ÑŒ ÑÐ»Ð¾Ð¶Ð½Ð¾ÑÑ‚Ð¸: ${LEVEL_LABELS.RU[task.level]} â€” ${buildLevelDescription(task.level)}
+ÐšÐ¾Ð»Ð¸Ñ‡ÐµÑÑ‚Ð²Ð¾ Ð·Ð°Ð´Ð°Ð½Ð¸Ð¹: ${task.count}
+Ð¯Ð·Ñ‹Ðº: ÑÑ„Ð¾Ñ€Ð¼ÑƒÐ»Ð¸Ñ€ÑƒÐ¹ Ð²ÑÐµ Ð·Ð°Ð´Ð°Ð½Ð¸Ñ Ð½Ð° ${LANG_NAMES[task.language] || task.language}.
 ${buildFastTypeHint(context.questionTypes || ["knowledge", "understanding"], task.count)}
-Формат: только нумерованный список (1. 2. 3. ...). Без заголовков, пояснений и ответов.`;
+${buildBrevityHint(task.language, context.questionLength)}
+Ð¤Ð¾Ñ€Ð¼Ð°Ñ‚: Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð½ÑƒÐ¼ÐµÑ€Ð¾Ð²Ð°Ð½Ð½Ñ‹Ð¹ ÑÐ¿Ð¸ÑÐ¾Ðº (1. 2. 3. ...). Ð‘ÐµÐ· Ð·Ð°Ð³Ð¾Ð»Ð¾Ð²ÐºÐ¾Ð², Ð¿Ð¾ÑÑÐ½ÐµÐ½Ð¸Ð¹ Ð¸ Ð¾Ñ‚Ð²ÐµÑ‚Ð¾Ð².`;
 
   const text = await withRetry(() => callGemini(systemPrompt, userPrompt));
   const questions = parseNumberedList(text);
-  return (questions.length > 0 ? questions : text.split("\n").map((l) => l.trim()).filter(Boolean)).slice(0, task.count);
+  const raw = (questions.length > 0 ? questions : text.split("\n").map((l) => l.trim()).filter(Boolean)).slice(0, task.count);
+  return raw.map((question) => enforceQuestionBrevity(question, task.language, context.questionLength)).filter(Boolean);
 }
-
 export async function generateOneQuestionQuality(context, topic, level, language, index) {
   const systemPrompt = buildSystemPrompt(context);
   const typeHintGen = buildQualityTypeHint(context.questionTypes || ["knowledge", "understanding"], index);
 
   const draft = await withRetry(() => callGemini(systemPrompt,
-    `Тема: ${topic}\nУровень: ${LEVEL_LABELS.RU[level]} — ${buildLevelDescription(level)}\nСоставь ровно 1 задание (№${index}).\n${typeHintGen}\nЯзык: ${LANG_NAMES[language] || language}.\nФормат: только текст задания без нумерации, заголовков и ответов.`
+    `Ð¢ÐµÐ¼Ð°: ${topic}\nÐ£Ñ€Ð¾Ð²ÐµÐ½ÑŒ: ${LEVEL_LABELS.RU[level]} â€” ${buildLevelDescription(level)}\nÐ¡Ð¾ÑÑ‚Ð°Ð²ÑŒ Ñ€Ð¾Ð²Ð½Ð¾ 1 Ð·Ð°Ð´Ð°Ð½Ð¸Ðµ (â„–${index}).\n${typeHintGen}\n${buildBrevityHint(language, context.questionLength)}\nÐ¯Ð·Ñ‹Ðº: ${LANG_NAMES[language] || language}.\nÐ¤Ð¾Ñ€Ð¼Ð°Ñ‚: Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ñ‚ÐµÐºÑÑ‚ Ð·Ð°Ð´Ð°Ð½Ð¸Ñ Ð±ÐµÐ· Ð½ÑƒÐ¼ÐµÑ€Ð°Ñ†Ð¸Ð¸, Ð·Ð°Ð³Ð¾Ð»Ð¾Ð²ÐºÐ¾Ð² Ð¸ Ð¾Ñ‚Ð²ÐµÑ‚Ð¾Ð².`
   ));
 
-  const criticSystem = `Ты — строгий критик экзаменационных заданий для медицинского вуза.
-Проверь задание по чеклисту и выдай краткий список замечаний (если есть) или напиши ровно одно слово "ОДОБРЕНО".
-Чеклист:
-1. Медицинская корректность — нет фактических ошибок, устаревших данных, вымышленных препаратов или диагнозов.
-2. Соответствие уровню сложности (${LEVEL_LABELS.RU[level]}).
-3. Соответствие курсу (${context.course}) и факультету (${context.faculty}).
-4. Отсутствие подсказки в тексте.
-5. Однозначность — чёткий единственно правильный ответ.
-6. Самодостаточность — понятно без контекста.
-7. Актуальность — современные протоколы.
-8. Тип задания соответствует: ${typeHintGen.split(":")[0]}.
-Отвечай кратко. Если замечаний нет — только "ОДОБРЕНО".`;
+  const criticSystem = `Ð¢Ñ‹ â€” ÑÑ‚Ñ€Ð¾Ð³Ð¸Ð¹ ÐºÑ€Ð¸Ñ‚Ð¸Ðº ÑÐºÐ·Ð°Ð¼ÐµÐ½Ð°Ñ†Ð¸Ð¾Ð½Ð½Ñ‹Ñ… Ð·Ð°Ð´Ð°Ð½Ð¸Ð¹ Ð´Ð»Ñ Ð¼ÐµÐ´Ð¸Ñ†Ð¸Ð½ÑÐºÐ¾Ð³Ð¾ Ð²ÑƒÐ·Ð°.
+ÐŸÑ€Ð¾Ð²ÐµÑ€ÑŒ Ð·Ð°Ð´Ð°Ð½Ð¸Ðµ Ð¿Ð¾ Ñ‡ÐµÐºÐ»Ð¸ÑÑ‚Ñƒ Ð¸ Ð²Ñ‹Ð´Ð°Ð¹ ÐºÑ€Ð°Ñ‚ÐºÐ¸Ð¹ ÑÐ¿Ð¸ÑÐ¾Ðº Ð·Ð°Ð¼ÐµÑ‡Ð°Ð½Ð¸Ð¹ (ÐµÑÐ»Ð¸ ÐµÑÑ‚ÑŒ) Ð¸Ð»Ð¸ Ð½Ð°Ð¿Ð¸ÑˆÐ¸ Ñ€Ð¾Ð²Ð½Ð¾ Ð¾Ð´Ð½Ð¾ ÑÐ»Ð¾Ð²Ð¾ "ÐžÐ”ÐžÐ‘Ð Ð•ÐÐž".
+Ð§ÐµÐºÐ»Ð¸ÑÑ‚:
+1. ÐœÐµÐ´Ð¸Ñ†Ð¸Ð½ÑÐºÐ°Ñ ÐºÐ¾Ñ€Ñ€ÐµÐºÑ‚Ð½Ð¾ÑÑ‚ÑŒ â€” Ð½ÐµÑ‚ Ñ„Ð°ÐºÑ‚Ð¸Ñ‡ÐµÑÐºÐ¸Ñ… Ð¾ÑˆÐ¸Ð±Ð¾Ðº, ÑƒÑÑ‚Ð°Ñ€ÐµÐ²ÑˆÐ¸Ñ… Ð´Ð°Ð½Ð½Ñ‹Ñ…, Ð²Ñ‹Ð¼Ñ‹ÑˆÐ»ÐµÐ½Ð½Ñ‹Ñ… Ð¿Ñ€ÐµÐ¿Ð°Ñ€Ð°Ñ‚Ð¾Ð² Ð¸Ð»Ð¸ Ð´Ð¸Ð°Ð³Ð½Ð¾Ð·Ð¾Ð².
+2. Ð¡Ð¾Ð¾Ñ‚Ð²ÐµÑ‚ÑÑ‚Ð²Ð¸Ðµ ÑƒÑ€Ð¾Ð²Ð½ÑŽ ÑÐ»Ð¾Ð¶Ð½Ð¾ÑÑ‚Ð¸ (${LEVEL_LABELS.RU[level]}).
+3. Ð¡Ð¾Ð¾Ñ‚Ð²ÐµÑ‚ÑÑ‚Ð²Ð¸Ðµ ÐºÑƒÑ€ÑÑƒ (${context.course}) Ð¸ Ñ„Ð°ÐºÑƒÐ»ÑŒÑ‚ÐµÑ‚Ñƒ (${context.faculty}).
+4. ÐžÑ‚ÑÑƒÑ‚ÑÑ‚Ð²Ð¸Ðµ Ð¿Ð¾Ð´ÑÐºÐ°Ð·ÐºÐ¸ Ð² Ñ‚ÐµÐºÑÑ‚Ðµ.
+5. ÐžÐ´Ð½Ð¾Ð·Ð½Ð°Ñ‡Ð½Ð¾ÑÑ‚ÑŒ â€” Ñ‡Ñ‘Ñ‚ÐºÐ¸Ð¹ ÐµÐ´Ð¸Ð½ÑÑ‚Ð²ÐµÐ½Ð½Ð¾ Ð¿Ñ€Ð°Ð²Ð¸Ð»ÑŒÐ½Ñ‹Ð¹ Ð¾Ñ‚Ð²ÐµÑ‚.
+6. Ð¡Ð°Ð¼Ð¾Ð´Ð¾ÑÑ‚Ð°Ñ‚Ð¾Ñ‡Ð½Ð¾ÑÑ‚ÑŒ â€” Ð¿Ð¾Ð½ÑÑ‚Ð½Ð¾ Ð±ÐµÐ· ÐºÐ¾Ð½Ñ‚ÐµÐºÑÑ‚Ð°.
+7. ÐÐºÑ‚ÑƒÐ°Ð»ÑŒÐ½Ð¾ÑÑ‚ÑŒ â€” ÑÐ¾Ð²Ñ€ÐµÐ¼ÐµÐ½Ð½Ñ‹Ðµ Ð¿Ñ€Ð¾Ñ‚Ð¾ÐºÐ¾Ð»Ñ‹.
+8. Ð¢Ð¸Ð¿ Ð·Ð°Ð´Ð°Ð½Ð¸Ñ ÑÐ¾Ð¾Ñ‚Ð²ÐµÑ‚ÑÑ‚Ð²ÑƒÐµÑ‚: ${typeHintGen.split(":")[0]}.
+9. ÐšÑ€Ð°Ñ‚ÐºÐ¾ÑÑ‚ÑŒ: 1 Ñ„Ñ€Ð°Ð·Ð°, Ð±ÐµÐ· Ð¼Ð½Ð¾Ð³Ð¾ÑÐ¾ÑÑ‚Ð°Ð²Ð½Ð¾Ð¹ Ñ„Ð¾Ñ€Ð¼ÑƒÐ»Ð¸Ñ€Ð¾Ð²ÐºÐ¸, Ð¾Ñ‚Ð²ÐµÑ‚ Ð²Ð¾Ð·Ð¼Ð¾Ð¶ÐµÐ½ Ð·Ð° ${getAnswerMinutes(context.questionLength)} Ð¼Ð¸Ð½ÑƒÑ‚Ñ‹.
+ÐžÑ‚Ð²ÐµÑ‡Ð°Ð¹ ÐºÑ€Ð°Ñ‚ÐºÐ¾. Ð•ÑÐ»Ð¸ Ð·Ð°Ð¼ÐµÑ‡Ð°Ð½Ð¸Ð¹ Ð½ÐµÑ‚ â€” Ñ‚Ð¾Ð»ÑŒÐºÐ¾ "ÐžÐ”ÐžÐ‘Ð Ð•ÐÐž".`;
 
   const criticism = await withRetry(() => callGeminiLowTemp(criticSystem,
-    `Предмет: ${context.subject}. Тема: ${topic}.\nЗадание: ${draft}`
+    `ÐŸÑ€ÐµÐ´Ð¼ÐµÑ‚: ${context.subject}. Ð¢ÐµÐ¼Ð°: ${topic}.\nÐ—Ð°Ð´Ð°Ð½Ð¸Ðµ: ${draft}`
   ));
 
-  if (criticism.trim().toUpperCase().startsWith("ОДОБРЕНО")) return draft.trim();
+  if (criticism.trim().toUpperCase().startsWith("ÐžÐ”ÐžÐ‘Ð Ð•ÐÐž")) {
+    return enforceQuestionBrevity(draft.trim(), language, context.questionLength);
+  }
 
   const edited = await withRetry(() => callGeminiLowTemp(
-    `Ты — редактор экзаменационных заданий. Исправь задание по замечаниям критика.\n${typeHintGen}\nВерни только исправленный текст без комментариев.`,
-    `Предмет: ${context.subject}. Тема: ${topic}. Уровень: ${LEVEL_LABELS.RU[level]}. Язык: ${LANG_NAMES[language] || language}.\n\nЧерновик:\n${draft}\n\nЗамечания:\n${criticism}\n\nВерни только исправленный текст.`
+    `Ð¢Ñ‹ â€” Ñ€ÐµÐ´Ð°ÐºÑ‚Ð¾Ñ€ ÑÐºÐ·Ð°Ð¼ÐµÐ½Ð°Ñ†Ð¸Ð¾Ð½Ð½Ñ‹Ñ… Ð·Ð°Ð´Ð°Ð½Ð¸Ð¹. Ð˜ÑÐ¿Ñ€Ð°Ð²ÑŒ Ð·Ð°Ð´Ð°Ð½Ð¸Ðµ Ð¿Ð¾ Ð·Ð°Ð¼ÐµÑ‡Ð°Ð½Ð¸ÑÐ¼ ÐºÑ€Ð¸Ñ‚Ð¸ÐºÐ°.\n${typeHintGen}\n${buildBrevityHint(language, context.questionLength)}\nÐ’ÐµÑ€Ð½Ð¸ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð¸ÑÐ¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð½Ñ‹Ð¹ Ñ‚ÐµÐºÑÑ‚ Ð±ÐµÐ· ÐºÐ¾Ð¼Ð¼ÐµÐ½Ñ‚Ð°Ñ€Ð¸ÐµÐ².`,
+    `ÐŸÑ€ÐµÐ´Ð¼ÐµÑ‚: ${context.subject}. Ð¢ÐµÐ¼Ð°: ${topic}. Ð£Ñ€Ð¾Ð²ÐµÐ½ÑŒ: ${LEVEL_LABELS.RU[level]}. Ð¯Ð·Ñ‹Ðº: ${LANG_NAMES[language] || language}.\n\nÐ§ÐµÑ€Ð½Ð¾Ð²Ð¸Ðº:\n${draft}\n\nÐ—Ð°Ð¼ÐµÑ‡Ð°Ð½Ð¸Ñ:\n${criticism}\n\nÐ’ÐµÑ€Ð½Ð¸ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð¸ÑÐ¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð½Ñ‹Ð¹ Ñ‚ÐµÐºÑÑ‚.`
   ));
-  return (edited || draft).trim();
+  return enforceQuestionBrevity((edited || draft).trim(), language, context.questionLength);
 }
-
 export async function generateQuality(task, context, onQuestion) {
   for (let i = 1; i <= task.count; i++) {
     try {
@@ -387,7 +457,15 @@ export function jobStatusPayload(job) {
 export function jobResultPayload(job) {
   return {
     jobId: job.id, status: job.status,
-    metadata: { subject: job.context.subject, faculty: job.context.faculty, course: job.context.course, examType: job.context.examType, mode: job.mode, totalQuestions: job.progress.generatedQuestions },
+    metadata: {
+      subject: job.context.subject,
+      faculty: job.context.faculty,
+      course: job.context.course,
+      examType: job.context.examType,
+      mode: job.mode,
+      questionLength: job.context.questionLength || "short",
+      totalQuestions: job.progress.generatedQuestions
+    },
     questionsByLanguage: job.resultByLanguage
   };
 }

@@ -20,6 +20,7 @@ const refs = {
   examTypeSelect: document.getElementById("examTypeSelect"),
   subjectInput: document.getElementById("subjectInput"),
   modeSelect: document.getElementById("modeSelect"),
+  questionLengthSelect: document.getElementById("questionLengthSelect"),
   topicInput: document.getElementById("topicInput"),
   addTopicBtn: document.getElementById("addTopicBtn"),
   bulkTopicsInput: document.getElementById("bulkTopicsInput"),
@@ -70,6 +71,12 @@ function getFaculty() {
     return refs.customFacultyInput.value.trim();
   }
   return refs.facultySelect.value;
+}
+
+function questionLengthLabel(mode) {
+  if (mode === "detailed") return "Развернутый (6-8 мин)";
+  if (mode === "standard") return "Стандартный (4-6 мин)";
+  return "Короткий (2-4 мин)";
 }
 
 function totalQuestionsForTopic(topic) {
@@ -234,7 +241,8 @@ function currentPayload() {
       examType: refs.examTypeSelect.value,
       subject: refs.subjectInput.value.trim(),
       questionTypes: selectedQuestionTypes(),
-      mode: refs.modeSelect.value
+      mode: refs.modeSelect.value,
+      questionLength: refs.questionLengthSelect.value
     },
     languages: selectedLanguages(),
     topics: state.topics.map((topic) => ({
@@ -325,7 +333,8 @@ function renderResultQuestions() {
   }
 
   const modeLabel = state.job.result?.metadata?.mode === "quality" ? "Качественный (цепочка агентов)" : "Быстрый";
-  refs.resultInfo.textContent = `Язык: ${lang} · Вопросов: ${questions.length} · Режим: ${modeLabel}`;
+  const lengthLabel = questionLengthLabel(state.job.result?.metadata?.questionLength);
+  refs.resultInfo.textContent = `Язык: ${lang} · Вопросов: ${questions.length} · Режим: ${modeLabel} · Длина: ${lengthLabel}`;
 }
 
 function renderLanguageTabs() {
@@ -517,6 +526,7 @@ function resetForm() {
   refs.examTypeSelect.value = "Устный";
   refs.subjectInput.value = "";
   refs.modeSelect.value = "fast";
+  refs.questionLengthSelect.value = "short";
   document.querySelectorAll('input[type="checkbox"]:not([name="questionType"])').forEach((input) => {
     input.checked = input.value === "RU";
   });
@@ -553,6 +563,7 @@ function bindEvents() {
   refs.examTypeSelect.addEventListener("change", validateForm);
   refs.subjectInput.addEventListener("input", validateForm);
   refs.modeSelect.addEventListener("change", validateForm);
+  refs.questionLengthSelect.addEventListener("change", validateForm);
   document.querySelectorAll('input[type="checkbox"][value]').forEach((input) => {
     input.addEventListener("change", validateForm);
   });
