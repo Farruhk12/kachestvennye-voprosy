@@ -22,9 +22,15 @@ export default async function handler(req, res) {
 
   const { context, languages, topics } = normalized.value;
 
+  // If singleTopicIndex is provided, process only that topic
+  const singleTopicIndex = payload.singleTopicIndex;
+  const topicsToProcess = (typeof singleTopicIndex === "number" && singleTopicIndex >= 0 && singleTopicIndex < topics.length)
+    ? [topics[singleTopicIndex]]
+    : topics;
+
   // Build task list
   const tasks = [];
-  for (const topic of topics) {
+  for (const topic of topicsToProcess) {
     for (const level of LEVELS) {
       for (const language of languages) {
         const count = topic.counts[level];
@@ -103,7 +109,7 @@ export default async function handler(req, res) {
     }
   });
 
-  const plannedTotal = topics.reduce((sum, topic) => (
+  const plannedTotal = topicsToProcess.reduce((sum, topic) => (
     sum + (topic.counts.easy + topic.counts.medium + topic.counts.hard) * languages.length
   ), 0);
   const totalGenerated = Object.values(resultByLanguage).reduce((s, arr) => s + arr.length, 0);

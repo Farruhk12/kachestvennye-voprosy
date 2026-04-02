@@ -444,29 +444,123 @@ async function runSynchronousGeneration(payload, statusLabel = "Переключ
 
   refs.progressBlock.classList.remove("hidden");
   refs.progressStatusLabel.textContent = statusLabel;
-  refs.progressText.textContent = "...";
-  refs.progressFill.style.width = "12%";
-  refs.progressCount.textContent = "Выполняется генерация...";
+  refs.progressText.textContent = "0%";
+  refs.progressFill.style.width = "0%";
+  refs.progressCount.textContent = "Подготовка...";
+
+  const topics = payload.topics || [];
+  const languages = payload.languages || [];
+  const accumulatedByLanguage = Object.fromEntries(languages.map((l) => [l, []]));
+  let totalPlanned = 0;
+  let totalDone = 0;
+  let totalDuplicates = 0;
+  const allErrors = [];
+  let hasErrors = false;
+
+  for (const topic of topics) {
+    totalPlanned += (topic.counts.easy + topic.counts.medium + topic.counts.hard) * languages.length;
+  }
 
   try {
-    const result = await api("/api/generate", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
-    const done = Number(result.metadata?.totalQuestions || 0);
-    const planned = Number(result.metadata?.plannedQuestions || done);
-    const duplicatesSkipped = Number(result.metadata?.duplicatesSkipped || 0);
-    const terminalStatus = String(result.status || "completed");
+    for (let i = 0; i < topics.length; i++) {
+      if (state.job.status === "cancelled") break;
+      const topic = topics[i];
+      const percent = Math.round((i / topics.length) * 100);
+      refs.progressStatusLabel.textContent = `Тема ${i + 1} из ${topics.length}: ${topic.name}`;
+      refs.progressText.textContent = `${percent}%`;
+      refs.progressFill.style.width = `${percent}%`;
+      refs.progressCount.textContent = `${totalDone} из ${totalPlanned} вопросов`;
 
-    refs.progressStatusLabel.textContent = terminalStatus === "completed_with_errors" ? "Завершено с замечаниями" : "Готово ✓";
+      // Render per-topic mini-bars
+      refs.topicStatusGrid.innerHTML = "";
+      for (let j = 0; j < topics.length; j++) {
+        const t = topics[j];
+        const perTopicTotal = (t.counts.easy + t.counts.medium + t.counts.hard) * languages.length;
+        const isDone = j < i;
+        const isCurrent = j === i;
+        const item = document.createElement("div");
+        item.className = "topic-status-item";
+        item.innerHTML = `
+          <div class="topic-status-row">
+            <span class="topic-status-name">${t.name}</span>
+            <span class="topic-status-nums${isDone ? " done" : ""}">${isDone ? perTopicTotal : (isCurrent ? "..." : 0)}/${perTopicTotal}${isDone ? " ✓" : ""}</span>
+          </div>
+          <div class="topic-mini-track">
+            <div class="topic-mini-fill" style="width:${isDone ? 100 : (isCurrent ? 50 : 0)}%"></div>
+          </div>`;
+        refs.topicStatusGrid.appendChild(item);
+      }
+
+      try {
+        const result = await api("/api/generate", {
+          method: "POST",
+          body: JSON.stringify({ ...payload, singleTopicIndex: i })
+        });
+
+        // Merge questions into accumulated result
+        for (const lang of languages) {
+          const incoming = result.questionsByLanguage?.[lang] || [];
+          accumulatedByLanguage[lang].push(...incoming);
+        }
+        totalDone += Number(result.metadata?.totalQuestions || 0);
+        totalDuplicates += Number(result.metadata?.duplicatesSkipped || 0);
+        if (result.errors?.length) {
+          hasErrors = true;
+          allErrors.push(...result.errors);
+        }
+
+        // Show partial results live
+        showResult({
+          status: "running",
+          metadata: {
+            subject: payload.context.subject,
+            faculty: payload.context.faculty,
+            course: payload.context.course,
+            examType: payload.context.examType,
+            mode: payload.context.mode,
+            questionLength: payload.context.questionLength,
+            totalQuestions: totalDone,
+            plannedQuestions: totalPlanned,
+            duplicatesSkipped: totalDuplicates
+          },
+          questionsByLanguage: accumulatedByLanguage,
+          errors: allErrors
+        }, { scroll: false });
+      } catch (err) {
+        hasErrors = true;
+        allErrors.push({ message: `Тема "${topic.name}": ${err instanceof Error ? err.message : "Ошибка"}` });
+      }
+    }
+
+    const terminalStatus = state.job.status === "cancelled" ? "cancelled"
+      : hasErrors && totalDone === 0 ? "failed"
+      : hasErrors ? "completed_with_errors"
+      : "completed";
+
+    refs.progressStatusLabel.textContent = terminalStatus === "completed" ? "Готово ✓" : terminalStatus === "cancelled" ? "Отменено" : "Завершено с замечаниями";
     refs.progressText.textContent = "100%";
     refs.progressFill.style.width = "100%";
-    refs.progressCount.textContent = duplicatesSkipped > 0
-      ? `${done} из ${planned} вопросов · убрано дублей: ${duplicatesSkipped}`
-      : `${done} из ${planned} вопросов`;
+    refs.progressCount.textContent = totalDuplicates > 0
+      ? `${totalDone} из ${totalPlanned} вопросов · убрано дублей: ${totalDuplicates}`
+      : `${totalDone} из ${totalPlanned} вопросов`;
 
     state.job.status = terminalStatus;
-    showResult(result, { scroll: false });
+    showResult({
+      status: terminalStatus,
+      metadata: {
+        subject: payload.context.subject,
+        faculty: payload.context.faculty,
+        course: payload.context.course,
+        examType: payload.context.examType,
+        mode: payload.context.mode,
+        questionLength: payload.context.questionLength,
+        totalQuestions: totalDone,
+        plannedQuestions: totalPlanned,
+        duplicatesSkipped: totalDuplicates
+      },
+      questionsByLanguage: accumulatedByLanguage,
+      errors: allErrors
+    }, { scroll: false });
   } finally {
     state.job.fallbackInProgress = false;
   }
@@ -640,7 +734,13 @@ async function startGeneration() {
 }
 
 async function cancelGeneration() {
-  if (!state.job.id || !["running", "cancelling"].includes(state.job.status)) return;
+  if (!["running", "cancelling"].includes(state.job.status)) return;
+  // Fallback per-topic mode: just set cancelled flag, loop will stop
+  if (!state.job.id) {
+    state.job.status = "cancelled";
+    refs.progressStatusLabel.textContent = "Отмена...";
+    return;
+  }
   try {
     const payload = await api(`/api/cancel?id=${encodeURIComponent(state.job.id)}`, { method: "POST" });
     state.job.status = payload.status || "cancelling";
