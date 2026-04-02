@@ -304,12 +304,26 @@ export function buildTypeInstruction(questionTypes) {
   return r;
 }
 
+function buildClinicalFocusRule(subject) {
+  const s = String(subject || "").toLowerCase();
+  // Subjects that are primarily theoretical/basic science — no clinical slant needed
+  const basicScience = ["анатомия", "гистология", "биохимия", "физиология", "биология", "химия", "физика", "латинский", "микробиология", "иммунология", "генетика", "патологическая анатомия", "патанатомия", "патологическая физиология", "патфизиология"];
+  const isBasic = basicScience.some((kw) => s.includes(kw));
+  if (isBasic) return "";
+  return `Акцент на клиническое мышление:
+- Большинство заданий (не менее 60%) должны проверять ПРАКТИЧЕСКОЕ применение знаний: диагностику, тактику ведения, выбор лечения, интерпретацию симптомов.
+- Избегать заданий, сводящихся исключительно к перечислению лабораторных или инструментальных показателей в отрыве от клинической ситуации.
+- Лабораторные и инструментальные данные допустимы только как часть клинического контекста (например, «У пациента такие-то показатели — ваша тактика?»), а не как самоцель.
+- Вопросы типа «Назовите нормы анализа крови» или «Перечислите показатели ЭКГ» — недопустимы без клинической привязки.`;
+}
+
 export function buildSystemPrompt(context) {
+  const clinicalFocus = buildClinicalFocusRule(context.subject);
   return `Ты — эксперт в области «${context.subject}» и опытный преподаватель медицинского вуза.
 Твоя задача — составлять экзаменационные задания для студентов ${context.course} курса ${context.faculty} факультета, тип экзамена: ${context.examType}.
 
 ${buildTypeInstruction(context.questionTypes || ["knowledge", "understanding"])}
-
+${clinicalFocus ? `\n${clinicalFocus}` : ""}
 Общие правила:
 - Задания соответствуют уровню обучения: курс и факультет учитываются.
 - Язык профессиональный, соответствует медицинской терминологии предмета.
