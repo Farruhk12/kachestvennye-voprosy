@@ -29,7 +29,7 @@ loadEnv();
 // ---------------------------------------------------------------------------
 const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_DIR = path.resolve(
-  path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")),
+  path.dirname(decodeURIComponent(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"))),
   "../public"
 );
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
