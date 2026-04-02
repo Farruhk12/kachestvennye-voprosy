@@ -45,20 +45,8 @@ function enforceQuestionBrevity(question, language, questionLength) {
   let clean = sanitizeQuestionText(question);
   if (!clean) return "";
 
-  // Only extract first sentence if it ends with a question mark (complete question).
-  // Never truncate a clinical stem (sentence ending with period) — the question part follows.
-  const firstSentence = clean.match(/^(.+?\?)(?:\s|$)/);
-  if (firstSentence) clean = firstSentence[1].trim();
-
-  const maxWords = getWordLimit(language, questionLength);
-  const words = clean.split(/\s+/).filter(Boolean);
-  if (words.length > maxWords) {
-    // Do not hard-cut clinical stems — allow up to 1.5x limit to preserve meaning
-    const hardLimit = Math.round(maxWords * 1.5);
-    const cutAt = Math.min(words.length, hardLimit);
-    clean = `${words.slice(0, cutAt).join(" ").replace(/[.,!?]+$/g, "").trim()}?`;
-  }
-
+  // Only add punctuation if missing — do NOT truncate.
+  // Word limits are enforced via the prompt; hard truncation corrupts clinical questions.
   if (!/[.?!]$/.test(clean)) clean += "?";
   return clean;
 }
